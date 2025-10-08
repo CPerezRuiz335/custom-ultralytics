@@ -101,6 +101,9 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
+from .fusion import (
+    Fusion,
+)
 
 __all__ = (
     "Conv",

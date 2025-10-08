@@ -68,6 +68,7 @@ from ultralytics.nn.modules import (
     YOLOEDetect,
     YOLOESegment,
     v10Detect,
+    Fusion,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1126,7 +1127,7 @@ class YOLOEModel(DetectionModel):
         self.model[-1].nc = len(names)
         self.names = check_class_names(names)
 
-    def get_cls_pe(self, tpe, vpe):
+    def get_cls_pe_original(self, tpe, vpe):
         """
         Get class positional embeddings.
 
@@ -1137,6 +1138,8 @@ class YOLOEModel(DetectionModel):
         Returns:
             (torch.Tensor): Class positional embeddings.
         """
+        # print("\n>>>>> dins el get_cls_pe")
+        # breakpoint()
         all_pe = []
         if tpe is not None:
             assert tpe.ndim == 3
@@ -1146,7 +1149,24 @@ class YOLOEModel(DetectionModel):
             all_pe.append(vpe)
         if not all_pe:
             all_pe.append(getattr(self, "pe", torch.zeros(1, 80, 512)))
-        return torch.cat(all_pe, dim=1)
+        return  torch.zeros(1, 4, 512) #torch.cat(all_pe, dim=1)
+    
+    def get_cls_pe(self, tpe, vpe):
+        """
+        Get class positional embeddings.
+
+        Args:
+            tpe (torch.Tensor, optional): Text positional embeddings.
+            vpe (torch.Tensor, optional): Visual positional embeddings.
+
+        Returns:
+            (torch.Tensor): Class positional embeddings.
+        """ 
+        if not hasattr(self, "fusion"):
+            self.fusion = Fusion(embed_dim=512, num_heads=1)
+        if tpe is None and vpe is None:
+            return getattr(self, "pe", torch.zeros(1, 80, 512))
+        return self.fusion(tpe, vpe)
 
     def predict(
         self, x, profile=False, visualize=False, tpe=None, augment=False, embed=None, vpe=None, return_vpe=False
@@ -1182,6 +1202,8 @@ class YOLOEModel(DetectionModel):
                     assert vpe is not None
                     assert not self.training
                     return vpe
+                # print("\n>>>>> previ al get_cls_pe")
+                # breakpoint()
                 cls_pe = self.get_cls_pe(m.get_tpe(tpe), vpe).to(device=x[0].device, dtype=x[0].dtype)
                 if cls_pe.shape[0] != b or m.export:
                     cls_pe = cls_pe.expand(b, -1, -1)

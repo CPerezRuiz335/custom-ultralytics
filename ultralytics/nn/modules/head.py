@@ -833,6 +833,7 @@ class YOLOESegment(YOLOEDetect):
         self.cv5 = nn.ModuleList(nn.Sequential(Conv(x, c5, 3), Conv(c5, c5, 3), nn.Conv2d(c5, self.nm, 1)) for x in ch)
 
     def forward(self, x: list[torch.Tensor], text: torch.Tensor) -> tuple | torch.Tensor:
+        print(f"YOLOESegment {text.shape = }")
         """Return model outputs and mask coefficients if training, otherwise return outputs and mask coefficients."""
         p = self.proto(x[0])  # mask protos
         bs = p.shape[0]  # batch size

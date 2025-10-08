@@ -64,6 +64,7 @@ class YOLOEDetectValidator(DetectionValidator):
         Returns:
             (torch.Tensor): Visual prompt embeddings with shape (1, num_classes, embed_dim).
         """
+        breakpoint()
         assert isinstance(model, YOLOEModel)
         names = [name.split("/", 1)[0] for name in list(dataloader.dataset.data["names"].values())]
         visual_pe = torch.zeros(len(names), model.model[-1].embed, device=self.device)
