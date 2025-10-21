@@ -437,6 +437,9 @@ class YOLOE(Model):
                     # NOTE: set the first frame as refer image for videos/streams inference
                     refer_image = next(iter(dataset))[1][0]
             if refer_image is not None:
+                if kwargs.pop("return_maps", False):
+                    return self.predictor.get_visual_maps(refer_image)
+                
                 vpe = self.predictor.get_vpe(refer_image)
                 self.model.set_classes(self.model.names, vpe)
                 self.task = "segment" if isinstance(self.predictor, yolo.segment.SegmentationPredictor) else "detect"

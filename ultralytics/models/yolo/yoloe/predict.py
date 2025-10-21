@@ -174,11 +174,20 @@ class YOLOEVPDetectPredictor(DetectionPredictor):
         Returns:
             (torch.Tensor): The visual prompt embeddings (VPE) from the model.
         """
+        breakpoint()
         self.setup_source(source)
         assert len(self.dataset) == 1, "get_vpe only supports one image!"
         for _, im0s, _ in self.dataset:
             im = self.preprocess(im0s)
             return self.model(im, vpe=self.prompts, return_vpe=True)
+        
+    
+    def get_visual_maps(self, source):
+        self.setup_source(source)
+        assert len(self.dataset) == 1, "get_vpe only supports one image!"
+        for _, im0s, _ in self.dataset:
+            im = self.preprocess(im0s)
+            return self.model(im, vpe=self.prompts)
 
 
 class YOLOEVPSegPredictor(YOLOEVPDetectPredictor, SegmentationPredictor):
