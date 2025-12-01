@@ -3,6 +3,7 @@
 import contextlib
 import pickle
 import re
+import random
 import types
 from copy import deepcopy
 from pathlib import Path
@@ -1138,8 +1139,6 @@ class YOLOEModel(DetectionModel):
         Returns:
             (torch.Tensor): Class positional embeddings.
         """
-        # print("\n>>>>> dins el get_cls_pe")
-        # breakpoint()
         all_pe = []
         if tpe is not None:
             assert tpe.ndim == 3
@@ -1151,7 +1150,7 @@ class YOLOEModel(DetectionModel):
             all_pe.append(getattr(self, "pe", torch.zeros(1, 80, 512)))
         return  torch.zeros(1, 4, 512) #torch.cat(all_pe, dim=1)
     
-    def get_cls_pe(self, tpe, vpe):
+    def get_cls_pe(self, tpe, vpe, inference=False):
         """
         Get class positional embeddings.
 
@@ -1161,15 +1160,49 @@ class YOLOEModel(DetectionModel):
 
         Returns:
             (torch.Tensor): Class positional embeddings.
-        """ 
+        """
         if not hasattr(self, "fusion"):
-            self.fusion = Fusion(embed_dim=512, num_heads=1)
+            device = next(self.model.parameters()).device
+            self.fusion = Fusion(embed_dim=512, num_heads=1).to(device)
         if tpe is None and vpe is None:
             return getattr(self, "pe", torch.zeros(1, 80, 512))
-        return self.fusion(tpe, vpe)
+        return self.fusion(tpe, vpe, inference)
+
+    def get_visual_embeddings_from_cache_indv(self, cache_path: str, cls_names: list[str], N) -> torch.Tensor:
+        """
+        (Individual)
+        """
+        if not hasattr(self, "device"):
+            self.device = next(self.model.parameters()).device
+        # load maps
+        with open(cache_path+"/maps.pkl", "rb") as f:
+            data = pickle.load(f)
+        vpes = []
+        for image_names in cls_names:
+            for cls_name in image_names[:N]:
+                possible_embeddings = data['class_to_embedding_map'][cls_name]
+                chosen_path = random.sample(possible_embeddings,1)[0]
+                vpes.append(torch.load(chosen_path, map_location=torch.device("cpu")))
+        return torch.stack(vpes, dim=0).to(torch.device("cuda:0"))
+
+    def get_visual_embeddings_from_cache(self, cache_path: str, cls_names: list[str], N) -> torch.Tensor:
+        if not hasattr(self, "device"):
+            self.device = next(self.model.parameters()).device
+        data = torch.load(cache_path, mmap=True, map_location=torch.device("cpu")) # fer servir memory map per no carregar-ho tot a memoria
+        embedding_indices = []
+        for image_names in cls_names:
+            for cls_name in image_names[:N]:
+                idxs = data['class_to_embedding_map'][cls_name]
+                if len(idxs) == 0:
+                    embedding_indices.append(0)
+                    print(cls_name)
+                    continue
+                embedding_indices.append(random.sample(idxs,1)[0])        
+        indices = torch.tensor(embedding_indices, dtype=torch.long)
+        return data['visual_embeddings'][indices, :].to(torch.device("cuda:0"))
 
     def predict(
-        self, x, profile=False, visualize=False, tpe=None, augment=False, embed=None, vpe=None, return_vpe=False
+        self, x, profile=False, visualize=False, tpe=None, augment=False, embed=None, vpe=None, return_vpe=False, batch=None
     ):
         """
         Perform a forward pass through the model.
@@ -1187,23 +1220,30 @@ class YOLOEModel(DetectionModel):
         Returns:
             (torch.Tensor): Model's output tensor.
         """
+        #breakpoint()
         y, dt, embeddings = [], [], []  # outputs
         b = x.shape[0]
         embed = frozenset(embed) if embed is not None else {-1}
         max_idx = max(embed)
+        use_cached_embeddings = hasattr(self.model, "visual_embeddings_cache_path")
         for m in self.model:  # except the head part
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
             if isinstance(m, YOLOEDetect):
-                vpe = m.get_vpe(x, vpe) if vpe is not None else None
+                if use_cached_embeddings and batch and batch.get('texts', False): # batch es None quan es fa validacio
+                    cache_path = self.model.visual_embeddings_cache_path
+                    vpe = self.get_visual_embeddings_from_cache(cache_path, 
+                                                                batch['texts'], 
+                                                                N=batch['visuals'].shape[1])
+                    vpe = vpe.reshape(b, -1, 512)
+                else:
+                    vpe = m.get_vpe(x, vpe) if vpe is not None else None
                 if return_vpe:
                     assert vpe is not None
                     assert not self.training
                     return vpe
-                # print("\n>>>>> previ al get_cls_pe")
-                # breakpoint()
                 cls_pe = self.get_cls_pe(m.get_tpe(tpe), vpe).to(device=x[0].device, dtype=x[0].dtype)
                 if cls_pe.shape[0] != b or m.export:
                     cls_pe = cls_pe.expand(b, -1, -1)
@@ -1283,7 +1323,10 @@ class YOLOESegModel(YOLOEModel, SegmentationModel):
             self.criterion = TVPSegmentLoss(self) if visual_prompt else self.init_criterion()
 
         if preds is None:
-            preds = self.forward(batch["img"], tpe=batch.get("txt_feats", None), vpe=batch.get("visuals", None))
+            preds = self.forward(batch["img"], tpe=batch.get("txt_feats", None), vpe=batch.get("visuals", None), batch=batch)
+        
+        batch['training'] = self.training
+
         return self.criterion(preds, batch)
 
 

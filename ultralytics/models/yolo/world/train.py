@@ -5,13 +5,15 @@ from __future__ import annotations
 import itertools
 from pathlib import Path
 from typing import Any
+from collections import defaultdict
 
 import torch
+import pickle
 
 from ultralytics.data import build_yolo_dataset
 from ultralytics.models.yolo.detect import DetectionTrainer
 from ultralytics.nn.tasks import WorldModel
-from ultralytics.utils import DEFAULT_CFG, LOGGER, RANK
+from ultralytics.utils import DEFAULT_CFG, LOGGER, RANK, TQDM
 from ultralytics.utils.torch_utils import unwrap_model
 
 
@@ -67,6 +69,7 @@ class WorldTrainer(DetectionTrainer):
         assert not overrides.get("compile"), f"Training with 'model={overrides['model']}' requires 'compile=False'"
         super().__init__(cfg, overrides, _callbacks)
         self.text_embeddings = None
+        self.visual_embeddings = None
 
     def get_model(self, cfg=None, weights: str | None = None, verbose: bool = True) -> WorldModel:
         """
@@ -113,6 +116,184 @@ class WorldTrainer(DetectionTrainer):
         if mode == "train":
             self.set_text_embeddings([dataset], batch)  # cache text embeddings to accelerate training
         return dataset
+
+    def cache_visual_embeddings_indv(self, datasets: list[Any]) -> None:
+        """
+        Cache visual embeddings individually (one .pt file for each bbox in the dataset)
+        """
+        for dataset in datasets:
+            if not hasattr(dataset, "im_files"):
+                continue
+
+            cache_path = Path(dataset.img_path).parent / "indv_visual_embeddings/"
+            self.model.model.visual_embeddings_cache_path = str(cache_path)
+
+            img_to_embedding_map = dict()
+            class_to_embedding_map = defaultdict(set)
+
+            class_to_synonyms = dict()
+            for names in dataset.data['names'].values():
+                synonyms = set(names.split('/'))
+                for synonym in synonyms:
+                    class_to_synonyms[synonym] = synonyms
+            
+            if cache_path.exists():
+                LOGGER.info(f"Will use existing cache from '{cache_path}'")
+                continue
+
+            LOGGER.info(f"Caching visual embeddings INDIVIDUALLY to '{cache_path}'")
+
+            for image in TQDM(dataset, total=len(dataset), desc="Generating visual embeddings"):
+                if image['bboxes'].shape[0] == 0:
+                    print(f"Image '{image['im_file']}' has no bounding boxes, skipping...")
+                    continue
+                embeddings = self.generate_visual_embeddings(image).squeeze(0)
+
+                assert embeddings.ndim == 2, f"Embeddings should have 2 dimensions, got {embeddings.ndim}"
+                assert embeddings.shape[0] == image['bboxes'].shape[0], \
+                    f"Number of embeddings {embeddings.shape[0]} does not match number of boxes {image['bboxes'].shape[0]}"
+
+                # image to embeddings idx
+                image_dir = cache_path / image['im_file'].split("/")[-1].split(".")[0]
+                if not image_dir.exists():
+                    image_dir.mkdir(parents=True, exist_ok=True)
+                filenames = [image_dir / (str(i)+".pt") for i in range(embeddings.shape[0])]
+                img_to_embedding_map[image['im_file']] = filenames
+                for i, filename in enumerate(filenames):
+                    torch.save(embeddings[i], filename)
+                
+                # class to embedding
+                for i, cls_ref in enumerate(image['cls']):
+                    cls_name = image['texts'][int(cls_ref)]
+                    class_to_embedding_map[cls_name].add(filenames[i])
+
+            
+            all_class_to_embedding_map = class_to_synonyms.copy()
+
+            for k in class_to_embedding_map.keys():
+                synonyms = class_to_synonyms[k]
+                embeddings = None
+                for synonym in synonyms:
+                    if synonym in class_to_embedding_map:
+                        embeddings = class_to_embedding_map[synonym]
+                        break
+
+                if embeddings is None:
+                    breakpoint()
+
+                for synonym in synonyms:
+                    all_class_to_embedding_map[synonym] = embeddings
+
+            print(f"Saving visual embeddings cache to '{cache_path}'")
+            with open(cache_path/"maps.pkl", "wb") as f:
+                pickle.dump({
+                    'img_to_embedding_map': img_to_embedding_map,
+                    'class_to_embedding_map': all_class_to_embedding_map
+                }, f)
+
+            break # de moment un sol dataset
+
+
+    def cache_visual_embeddings(self, datasets: list[Any], batch: int | None) -> None:
+        """
+        Cache visual embeddings for datasets to accelerate training by precomputing image features.
+
+        This method processes images from the datasets, generates their visual embeddings and caches
+        them for faster access during training.
+
+        Args:
+            datasets (list[Any]): List of datasets from which to extract images.
+            batch (int | None): Batch size used for processing.
+        """
+
+        for dataset in datasets:
+            if not hasattr(dataset, "im_files"):
+                continue
+                
+            cache_path = Path(dataset.img_path).parent / "visual_embeddings.pt"
+            self.model.model.visual_embeddings_cache_path = str(cache_path)
+            
+            visual_embeddings = None
+            img_to_embedding_map = dict()
+            class_to_embedding_map = defaultdict(set)
+
+            class_to_synonyms = dict()
+            for names in dataset.data['names'].values():
+                synonyms = set(names.split('/'))
+                for synonym in synonyms:
+                    class_to_synonyms[synonym] = synonyms
+            
+            if cache_path.exists():
+                LOGGER.info(f"Will use existing cache from '{cache_path}'")
+                # No cal carregar-ho tot directament, la funcio get_visual_embeddings_from_cache
+                # ja carrega nomes els vpes necessaris a cada moment
+
+                # with open(cache_path, 'rb') as f:
+                #     data = torch.load(f)
+                # dataset.img_to_embedding_map = data['img_to_embedding_map']
+                # dataset.class_to_embedding_map = data['class_to_embedding_map']
+                # self.visual_embeddings = data['visual_embeddings']
+                # assert len(set(dataset.im_files).difference(set(data['img_to_embedding_map'].keys()))) == 0
+                continue
+
+            LOGGER.info(f"Caching visual embeddings to '{cache_path}'")
+
+            for image in TQDM(dataset, total=len(dataset), desc="Generating visual embeddings"):
+                if image['bboxes'].shape[0] == 0:
+                    print(f"Image '{image['im_file']}' has no bounding boxes, skipping...")
+                    #breakpoint()
+                    continue
+                embeddings = self.generate_visual_embeddings(image).squeeze(0)
+
+                assert embeddings.ndim == 2, f"Embeddings should have 2 dimensions, got {embeddings.ndim}"
+                assert embeddings.shape[0] == image['bboxes'].shape[0], \
+                    f"Number of embeddings {embeddings.shape[0]} does not match number of boxes {image['bboxes'].shape[0]}"
+
+                # update embeddings
+                last_n_embeddings = (visual_embeddings.shape[0]
+                                     if visual_embeddings is not None else 0)
+
+                if visual_embeddings is None:
+                    visual_embeddings = embeddings
+                else:
+                    visual_embeddings = torch.cat((visual_embeddings, embeddings), dim=0)
+
+                # image to embeddings idx
+                embeddings_idxs = list(range(last_n_embeddings, visual_embeddings.shape[0]))
+                img_to_embedding_map[image['im_file']] = embeddings_idxs
+                
+                # class to embedding
+                for i, cls_ref in enumerate(image['cls']):
+                    cls_name = image['texts'][int(cls_ref)]
+                    class_to_embedding_map[cls_name].add(embeddings_idxs[i])
+
+            all_class_to_embedding_map = class_to_synonyms.copy()
+
+            for k in class_to_embedding_map.keys():
+                synonyms = class_to_synonyms[k]
+                embeddings = None
+                for synonym in synonyms:
+                    if synonym in class_to_embedding_map:
+                        embeddings = class_to_embedding_map[synonym]
+                        break
+
+                if embeddings is None:
+                    breakpoint()
+
+                for synonym in synonyms:
+                    all_class_to_embedding_map[synonym] = embeddings
+
+            print(f"Saving visual embeddings cache to '{cache_path}'")
+            with open(cache_path, 'wb') as f:
+                torch.save({
+                    'visual_embeddings': visual_embeddings,
+                    'img_to_embedding_map': img_to_embedding_map,
+                    'class_to_embedding_map': all_class_to_embedding_map
+                }, f)
+
+            break # de moment un sol dataset
+
+        self.visual_embeddings = visual_embeddings
 
     def set_text_embeddings(self, datasets: list[Any], batch: int | None) -> None:
         """

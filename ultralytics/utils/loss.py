@@ -303,6 +303,8 @@ class v8DetectionLoss:
 
         return loss * batch_size, loss.detach()  # loss(box, cls, dfl)
 
+import torch.nn.functional as F
+import torch
 
 class v8SegmentationLoss(v8DetectionLoss):
     """Criterion class for computing training losses for YOLOv8 segmentation."""
@@ -314,13 +316,28 @@ class v8SegmentationLoss(v8DetectionLoss):
 
     def __call__(self, preds: Any, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate and return the combined loss for detection and segmentation."""
-        loss = torch.zeros(4, device=self.device)  # box, seg, cls, dfl
+        loss = torch.zeros(4, device=self.device)  # box, seg, cls, dfl, distill
         feats, pred_masks, proto = preds if len(preds) == 3 else preds[1]
         batch_size, _, mask_h, mask_w = proto.shape  # batch size, number of masks, mask height, mask width
         pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
             (self.reg_max * 4, self.nc), 1
         )
+        # breakpoint()
+        if self.hyp.distillation and batch.get('training', False):
+            teacher_distri, teacher_scores = torch.cat(
+                [xi.view(batch['feature_maps'][0].shape[0], self.no, -1) for xi in batch['feature_maps']], 
+                2).split((self.reg_max * 4, self.nc), 1)
+            kv_loss = torch.nn.KLDivLoss(reduction="batchmean", log_target=True)
+            loss = torch.cat([loss, kv_loss(
+                F.log_softmax(pred_distri, dim=1),
+                F.log_softmax(teacher_distri, dim=1).cuda()
+            ).unsqueeze(0)])
+            loss[4] *= self.hyp.distill # distillation gain
 
+            # breakpoint()
+            
+
+        
         # B, grids, ..
         pred_scores = pred_scores.permute(0, 2, 1).contiguous()
         pred_distri = pred_distri.permute(0, 2, 1).contiguous()
@@ -844,6 +861,8 @@ class TVPSegmentLoss(TVPDetectLoss):
 
     def __call__(self, preds: Any, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate the loss for text-visual prompt segmentation."""
+        from pathlib import Path
+
         feats, pred_masks, proto = preds if len(preds) == 3 else preds[1]
         assert self.ori_reg_max == self.vp_criterion.reg_max  # TODO: remove it
 
@@ -852,6 +871,28 @@ class TVPSegmentLoss(TVPDetectLoss):
             return loss, loss.detach()
 
         vp_feats = self._get_vp_features(feats)
+
+        def to_cpu(obj):
+            if isinstance(obj, torch.Tensor):
+                return obj.cpu()
+            elif isinstance(obj, (list, tuple)):
+                return type(obj)(to_cpu(x) for x in obj)
+            else:
+                return obj
+        
+        p = Path(batch['im_file'][0])
+        out = p.parents[1].with_name("features") / p.parent.name / (str(batch['idx']) + ".pt")
+        
+        if self.vp_criterion.hyp.save_feature_maps:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(to_cpu(vp_feats), out)
+        elif self.vp_criterion.hyp.distillation:
+            if out.parent.exists():
+                batch['feature_maps'] = torch.load(out)
+            else:
+                raise RuntimeError(f"Teacher's features not found in {str(out)}")
         vp_loss = self.vp_criterion((vp_feats, pred_masks, proto), batch)
         cls_loss = vp_loss[0][2]
         return cls_loss, vp_loss[1]
+
+

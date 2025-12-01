@@ -99,6 +99,7 @@ class YOLODataset(BaseDataset):
         Returns:
             (dict): Dictionary containing cached labels and related information.
         """
+        # breakpoint()
         x = {"labels": []}
         nm, nf, ne, nc, msgs = 0, 0, 0, 0, []  # number missing, found, empty, corrupt, messages
         desc = f"{self.prefix}Scanning {path.parent / path.stem}..."
@@ -130,6 +131,25 @@ class YOLODataset(BaseDataset):
                 ne += ne_f
                 nc += nc_f
                 if im_file:
+                    # p = Path(im_file)
+                    # out = p.parents[1].with_name("features") / p.parent.name / (p.stem + ".pt")
+                    # if out.exists():
+                    #     data = torch.load(out, map_location='cpu')
+
+                    #     x["labels"].append(
+                    #         {
+                    #             "im_file": im_file,
+                    #             "shape": shape,
+                    #             "cls": lb[:, 0:1],  # n, 1
+                    #             "bboxes": lb[:, 1:],  # n, 4
+                    #             "segments": segments,
+                    #             "keypoints": keypoint,
+                    #             "normalized": True,
+                    #             "bbox_format": "xywh",
+                    #             "feature_maps": data
+                    #         }
+                    #     )
+                    # else:
                     x["labels"].append(
                         {
                             "im_file": im_file,
@@ -142,6 +162,7 @@ class YOLODataset(BaseDataset):
                             "bbox_format": "xywh",
                         }
                     )
+
                 if msg:
                     msgs.append(msg)
                 pbar.desc = f"{desc} {nf} images, {nm + ne} backgrounds, {nc} corrupt"
@@ -168,6 +189,7 @@ class YOLODataset(BaseDataset):
         """
         self.label_files = img2label_paths(self.im_files)
         cache_path = Path(self.label_files[0]).parent.with_suffix(".cache")
+        # breakpoint()
         try:
             cache, exists = load_dataset_cache_file(cache_path), True  # attempt to load a *.cache file
             assert cache["version"] == DATASET_CACHE_VERSION  # matches current version
@@ -313,6 +335,7 @@ class YOLODataset(BaseDataset):
         for i in range(len(new_batch["batch_idx"])):
             new_batch["batch_idx"][i] += i  # add target image index for build_targets()
         new_batch["batch_idx"] = torch.cat(new_batch["batch_idx"], 0)
+
         return new_batch
 
 
@@ -658,6 +681,156 @@ class GroundingDataset(YOLODataset):
         """Get negative text samples based on frequency threshold."""
         threshold = min(max(category_freq.values()), 100)
         return [k for k, v in category_freq.items() if v >= threshold]
+
+class GroundingDatasetDistill(GroundingDataset):
+    def __init__(self, *args, **kwargs):
+        """
+        Initialize a GroundingDataset for object detection.
+
+        Args:
+            json_file (str): Path to the JSON file containing annotations.
+            task (str): Must be 'detect' or 'segment' for GroundingDataset.
+            max_samples (int): Maximum number of samples to load for text augmentation.
+            *args (Any): Additional positional arguments for the parent class.
+            **kwargs (Any): Additional keyword arguments for the parent class.
+        """
+        # classes per task is list of sets, where element 0 is for 
+        # first task, etc. And each 
+        if (value := kwargs.pop('classes_per_task', False)):
+            self.current_task_CL = value
+        else:
+            self.current_task_CL = -1
+
+        super().__init__(*args, **kwargs)
+        
+
+    def cache_labels(self, path: Path = Path("./labels.cache")) -> dict[str, Any]:
+        """
+        Load annotations from a JSON file, filter, and normalize bounding boxes for each image.
+
+        Args:
+            path (Path): Path where to save the cache file.
+
+        Returns:
+            (dict[str, Any]): Dictionary containing cached labels and related information.
+        """
+        x = {"labels": []}
+        LOGGER.info("Loading annotation file...")
+        with open(self.json_file) as f:
+            annotations = json.load(f)
+        images = {f"{x['id']:d}": x for x in annotations["images"]}
+        img_to_anns = defaultdict(list)
+        for ann in annotations["annotations"]:
+            img_to_anns[ann["image_id"]].append(ann)
+        for img_id, anns in TQDM(img_to_anns.items(), desc=f"Reading annotations {self.json_file}"):
+            img = images[f"{img_id:d}"]
+            h, w, f = img["height"], img["width"], img["file_name"]
+            im_file = Path(self.img_path) / f
+            if not im_file.exists():
+                continue
+
+            # Continual
+            if self.current_task_CL != -1 and img["task"] > self.current_task_CL:
+                continue
+
+            self.im_files.append(str(im_file))
+            bboxes = []
+            segments = []
+            cat2id = {}
+            texts = []
+            for ann in anns:
+                if ann["iscrowd"]:
+                    continue
+                box = np.array(ann["bbox"], dtype=np.float32)
+                box[:2] += box[2:] / 2
+                box[[0, 2]] /= float(w)
+                box[[1, 3]] /= float(h)
+                if box[2] <= 0 or box[3] <= 0:
+                    continue
+
+                caption = img["caption"]
+                cat_name = " ".join([caption[t[0] : t[1]] for t in ann["tokens_positive"]]).lower().strip()
+                if not cat_name:
+                    continue
+
+                if cat_name not in cat2id:
+                    cat2id[cat_name] = len(cat2id)
+                    texts.append([cat_name])
+                cls = cat2id[cat_name]  # class
+                box = [cls] + box.tolist()
+                if box not in bboxes:
+                    bboxes.append(box)
+                    if ann.get("segmentation") is not None:
+                        if len(ann["segmentation"]) == 0:
+                            segments.append(box)
+                            continue
+                        elif len(ann["segmentation"]) > 1:
+                            s = merge_multi_segment(ann["segmentation"])
+                            s = (np.concatenate(s, axis=0) / np.array([w, h], dtype=np.float32)).reshape(-1).tolist()
+                        else:
+                            s = [j for i in ann["segmentation"] for j in i]  # all segments concatenated
+                            s = (
+                                (np.array(s, dtype=np.float32).reshape(-1, 2) / np.array([w, h], dtype=np.float32))
+                                .reshape(-1)
+                                .tolist()
+                            )
+                        s = [cls] + s
+                        segments.append(s)
+            lb = np.array(bboxes, dtype=np.float32) if len(bboxes) else np.zeros((0, 5), dtype=np.float32)
+
+            if segments:
+                classes = np.array([x[0] for x in segments], dtype=np.float32)
+                segments = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in segments]  # (cls, xy1...)
+                lb = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)  # (cls, xywh)
+            lb = np.array(lb, dtype=np.float32)
+
+            x["labels"].append(
+                {
+                    "im_file": im_file,
+                    "shape": (h, w),
+                    "cls": lb[:, 0:1],  # n, 1
+                    "bboxes": lb[:, 1:],  # n, 4
+                    "segments": segments,
+                    "normalized": True,
+                    "bbox_format": "xywh",
+                    "texts": texts,
+                    "features_file": img["features_file"]
+                }
+            )
+        x["hash"] = get_hash(self.json_file)
+        save_dataset_cache_file(self.prefix, path, x, DATASET_CACHE_VERSION)
+        return x    
+
+    @staticmethod
+    def collate_fn(batch: list[dict]) -> dict:
+        """
+        Collate data samples into batches.
+
+        Args:
+            batch (list[dict]): List of dictionaries containing sample data.
+
+        Returns:
+            (dict): Collated batch with stacked tensors.
+        """
+        new_batch = {}
+        batch = [dict(sorted(b.items())) for b in batch]  # make sure the keys are in the same order
+        keys = batch[0].keys()
+        values = list(zip(*[list(b.values()) for b in batch]))
+        for i, k in enumerate(keys):
+            value = values[i]
+            if k in {"img", "text_feats"}:
+                value = torch.stack(value, 0)
+            elif k == "visuals":
+                value = torch.nn.utils.rnn.pad_sequence(value, batch_first=True)
+            if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb"}:
+                value = torch.cat(value, 0)
+            new_batch[k] = value
+        new_batch["batch_idx"] = list(new_batch["batch_idx"])
+        for i in range(len(new_batch["batch_idx"])):
+            new_batch["batch_idx"][i] += i  # add target image index for build_targets()
+        new_batch["batch_idx"] = torch.cat(new_batch["batch_idx"], 0)
+        return new_batch
+
 
 
 class YOLOConcatDataset(ConcatDataset):

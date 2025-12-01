@@ -114,7 +114,7 @@ class _RepeatSampler:
 
 def seed_worker(worker_id: int):  # noqa
     """Set dataloader worker seed for reproducibility across worker processes."""
-    worker_seed = torch.initial_seed() % 2**32
+    worker_seed = 1234
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
@@ -129,6 +129,7 @@ def build_yolo_dataset(
     stride: int = 32,
     multi_modal: bool = False,
 ):
+    # breakpoint()
     """Build and return a YOLO dataset based on configuration parameters."""
     dataset = YOLOMultiModalDataset if multi_modal else YOLODataset
     return dataset(
@@ -206,11 +207,11 @@ def build_dataloader(dataset, batch: int, workers: int, shuffle: bool = True, ra
     nw = min(os.cpu_count() // max(nd, 1), workers)  # number of workers
     sampler = None if rank == -1 else distributed.DistributedSampler(dataset, shuffle=shuffle)
     generator = torch.Generator()
-    generator.manual_seed(6148914691236517205 + RANK)
+    generator.manual_seed(1234)
     return InfiniteDataLoader(
         dataset=dataset,
         batch_size=batch,
-        shuffle=shuffle and sampler is None,
+        shuffle=False, # shuffle and sampler is None,
         num_workers=nw,
         sampler=sampler,
         prefetch_factor=4 if nw > 0 else None,  # increase over default 2

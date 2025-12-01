@@ -208,6 +208,7 @@ class BaseDataset(Dataset):
                     self.labels[i]["keypoints"] = keypoints[j]
             if self.single_cls:
                 self.labels[i]["cls"][:, 0] = 0
+        # breakpoint()
 
     def load_image(self, i: int, rect_mode: bool = True) -> tuple[np.ndarray, tuple[int, int], tuple[int, int]]:
         """
@@ -378,7 +379,12 @@ class BaseDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         """Return transformed label information for given index."""
-        return self.transforms(self.get_image_and_label(index))
+        labels = self.get_image_and_label(index)
+        transforms = self.transforms(labels)
+        if "feature_maps" in labels:
+            transforms["feature_maps"] = labels["feature_maps"]
+
+        return transforms
 
     def get_image_and_label(self, index: int) -> dict[str, Any]:
         """

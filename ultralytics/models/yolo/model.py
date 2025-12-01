@@ -371,6 +371,7 @@ class YOLOE(Model):
         visual_prompts: dict[str, list] = {},
         refer_image=None,
         predictor=yolo.yoloe.YOLOEVPDetectPredictor,
+        return_vpes=False,
         **kwargs,
     ):
         """
@@ -431,14 +432,18 @@ class YOLOE(Model):
             self.predictor.set_prompts(visual_prompts.copy())
             self.predictor.setup_model(model=self.model)
 
+            if kwargs.get('return_maps', False):
+                return self.predictor.get_feature_maps(refer_image)
+            
             if refer_image is None and source is not None:
                 dataset = load_inference_source(source)
                 if dataset.mode in {"video", "stream"}:
                     # NOTE: set the first frame as refer image for videos/streams inference
                     refer_image = next(iter(dataset))[1][0]
             if refer_image is not None:
-                print("YOLOE predict")
                 vpe = self.predictor.get_vpe(refer_image)
+                if return_vpes:
+                    return vpe
                 self.model.set_classes(self.model.names, vpe)
                 self.task = "segment" if isinstance(self.predictor, yolo.segment.SegmentationPredictor) else "detect"
                 self.predictor = None  # reset predictor
