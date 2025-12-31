@@ -324,15 +324,37 @@ class v8SegmentationLoss(v8DetectionLoss):
         )
         # breakpoint()
         if self.hyp.distillation and batch.get('training', False):
+            idxs = []
+            if self.hyp.prev_classes:
+                from ultralytics.data.utils import check_det_dataset
+                class_names = check_det_dataset(self.hyp.data['train']['yolo_data'][0])['names']
+                prev_classes = set(class_names[i] for i in self.hyp.prev_classes)
+                for i, batch_idx in enumerate(batch['batch_idx'].tolist()[-self.nc:]):
+                    if batch['texts'][int(batch_idx)][0] in prev_classes:
+                        idxs.append(i)
+                
+
             teacher_distri, teacher_scores = torch.cat(
                 [xi.view(batch['feature_maps'][0].shape[0], self.no, -1) for xi in batch['feature_maps']], 
                 2).split((self.reg_max * 4, self.nc), 1)
+            
             kv_loss = torch.nn.KLDivLoss(reduction="batchmean", log_target=True)
             loss = torch.cat([loss, kv_loss(
                 F.log_softmax(pred_distri, dim=1),
                 F.log_softmax(teacher_distri, dim=1).cuda()
             ).unsqueeze(0)])
             loss[4] *= self.hyp.distill # distillation gain
+
+            if idxs:
+                loss = torch.cat([loss, kv_loss(
+                    F.log_softmax(pred_scores[:, idxs], dim=1),
+                    F.log_softmax(teacher_scores[:, idxs], dim=1).cuda()
+                ).unsqueeze(0)])
+                loss[5] *= self.hyp.distill # distillation gain
+
+            else:
+                loss = torch.cat([loss, torch.tensor([0.], device=loss.device, dtype=loss.dtype)])
+                loss[5] *= self.hyp.distill # distillation gain
 
             # breakpoint()
             
@@ -867,7 +889,8 @@ class TVPSegmentLoss(TVPDetectLoss):
         assert self.ori_reg_max == self.vp_criterion.reg_max  # TODO: remove it
 
         if self.ori_reg_max * 4 + self.ori_nc == feats[0].shape[1]:
-            loss = torch.zeros(4, device=self.vp_criterion.device, requires_grad=True)
+            n_loss = 6 if self.vp_criterion.hyp.distillation else 4 
+            loss = torch.zeros(n_loss, device=self.vp_criterion.device, requires_grad=True)
             return loss, loss.detach()
 
         vp_feats = self._get_vp_features(feats)

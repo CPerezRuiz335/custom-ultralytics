@@ -131,3 +131,4 @@ cfg: # (str, optional) path to a config.yaml that overrides defaults
 tracker: botsort.yaml # (str) tracker config file: botsort.yaml or bytetrack.yaml
 save_feature_maps: false
 distillation: false
+prev_classes: []

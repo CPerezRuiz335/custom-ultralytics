@@ -396,6 +396,9 @@ class BaseTrainer:
             # breakpoint()
             for i, batch in pbar:
                 batch['idx'] = i
+                # batch with empty bboxes dute to selected classe in trainig
+                if batch['bboxes'].numel() == 0: 
+                    continue
                 self.run_callbacks("on_train_batch_start")
                 # Warmup
                 ni = i + nb * epoch
@@ -423,8 +426,12 @@ class BaseTrainer:
                     if RANK != -1:
                         self.loss *= self.world_size
                     self.tloss = (
-                        (self.tloss * i + self.loss_items) / (i + 1) if self.tloss is not None else self.loss_items
+                        (self.tloss * i + self.loss_items) / (i + 1) \
+                            if self.tloss is not None else self.loss_items
                     )
+
+                if self.args.save_feature_maps:
+                    continue
 
                 # Backward
                 self.scaler.scale(self.loss).backward()
@@ -473,7 +480,7 @@ class BaseTrainer:
 
                 # Validation
                 if self.args.val or final_epoch or self.stopper.possible_stop or self.stop:
-                    self._clear_memory(threshold=0.5)  # prevent VRAM spike
+                    self._clear_memory(threshold=0.1)  # prevent VRAM spike
                     self.metrics, self.fitness = self.validate()
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
@@ -507,11 +514,13 @@ class BaseTrainer:
                 break  # must break all DDP ranks
             epoch += 1
 
-        if RANK in {-1, 0}:
+        torch.cuda.empty_cache()
+
+        if  RANK in {-1, 0}:
             # Do final val with best.pt
             seconds = time.time() - self.train_time_start
             LOGGER.info(f"\n{epoch - self.start_epoch + 1} epochs completed in {seconds / 3600:.3f} hours.")
-            self.final_eval()
+            # self.final_eval() # !!!
             if self.args.plots:
                 self.plot_metrics()
             self.run_callbacks("on_train_end")

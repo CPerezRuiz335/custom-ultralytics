@@ -271,7 +271,7 @@ class YOLOEDetectValidator(DetectionValidator):
                 LOGGER.info("Validate using the text prompt.")
                 tpe = model.get_text_pe(names)
                 model.set_classes(names, tpe)
-                stats = super().__call__(model=deepcopy(model))
+                stats = super().__call__(model=model)
         return stats
 
 

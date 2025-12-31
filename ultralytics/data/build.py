@@ -117,6 +117,7 @@ def seed_worker(worker_id: int):  # noqa
     worker_seed = 1234
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
 
 
 def build_yolo_dataset(
@@ -205,7 +206,7 @@ def build_dataloader(dataset, batch: int, workers: int, shuffle: bool = True, ra
     batch = min(batch, len(dataset))
     nd = torch.cuda.device_count()  # number of CUDA devices
     nw = min(os.cpu_count() // max(nd, 1), workers)  # number of workers
-    sampler = None if rank == -1 else distributed.DistributedSampler(dataset, shuffle=shuffle)
+    sampler = None if rank == -1 else distributed.DistributedSampler(dataset, shuffle=False)
     generator = torch.Generator()
     generator.manual_seed(1234)
     return InfiniteDataLoader(

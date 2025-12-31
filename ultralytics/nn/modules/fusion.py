@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class Fusion_ambgate(nn.Module):
+class Fusion(nn.Module):
     def __init__(self, embed_dim, num_heads=1):
         super().__init__()
         self.cross = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
@@ -30,8 +30,8 @@ class Fusion_ambgate(nn.Module):
 
         if not inference:
             zeros = fused.new_zeros(B, N, D)
-            fused = torch.cat([fused, tpe2, zeros], dim=1)
-
+            fused = torch.cat([torch.full_like(fused, 0), torch.zeros(tpe2.shape).cuda(), zeros], dim=1)
+        
         return fused
 
 class Fusion_attn(nn.Module):
@@ -70,12 +70,12 @@ class Fusion_attn(nn.Module):
 
         if not inference:
             zeros = out.new_zeros((out.size(0), N, out.size(2)))
-            out = torch.cat((out, tpe2, zeros), dim=1)
+            out = torch.cat((out, torch.zeros(tpe2.shape), zeros), dim=1)
 
         return out
 
 
-class Fusion(nn.Module):
+class Fusion_(nn.Module):
     def __init__(self, embed_dim, num_heads=1):
         """
         Initialize Fusion layer with given parameters.

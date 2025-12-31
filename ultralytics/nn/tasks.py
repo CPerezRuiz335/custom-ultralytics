@@ -1147,8 +1147,9 @@ class YOLOEModel(DetectionModel):
             assert vpe.ndim == 3
             all_pe.append(vpe)
         if not all_pe:
-            all_pe.append(getattr(self, "pe", torch.zeros(1, 80, 512)))
-        return  torch.zeros(1, 4, 512) #torch.cat(all_pe, dim=1)
+            return getattr(self, "pe", torch.zeros(1, 80, 512))
+        
+        return torch.cat(all_pe, dim=1)
     
     def get_cls_pe(self, tpe, vpe, inference=False):
         """
@@ -1232,7 +1233,7 @@ class YOLOEModel(DetectionModel):
             if profile:
                 self._profile_one_layer(m, x, dt)
             if isinstance(m, YOLOEDetect):
-                if use_cached_embeddings and batch and batch.get('texts', False): # batch es None quan es fa validacio
+                if False and use_cached_embeddings and batch and batch.get('texts', False): # batch es None quan es fa validacio
                     cache_path = self.model.visual_embeddings_cache_path
                     vpe = self.get_visual_embeddings_from_cache(cache_path, 
                                                                 batch['texts'], 
@@ -1244,7 +1245,7 @@ class YOLOEModel(DetectionModel):
                     assert vpe is not None
                     assert not self.training
                     return vpe
-                cls_pe = self.get_cls_pe(m.get_tpe(tpe), vpe).to(device=x[0].device, dtype=x[0].dtype)
+                cls_pe = self.get_cls_pe_original(m.get_tpe(tpe), vpe).to(device=x[0].device, dtype=x[0].dtype)
                 if cls_pe.shape[0] != b or m.export:
                     cls_pe = cls_pe.expand(b, -1, -1)
                 x = m(x, cls_pe)
