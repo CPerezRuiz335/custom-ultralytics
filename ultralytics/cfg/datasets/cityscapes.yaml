@@ -1,0 +1,48 @@
+# Train/val/test sets as 1) dir: path/to/imgs, 2) file: path/to/imgs.txt, or 3) list: [path/to/imgs1, path/to/imgs2, ..]
+path: cityscapes # dataset root dir
+train: images/train # train images (relative to 'path') 4 images
+val: images/val # val images (relative to 'path') 4 images
+test: # test images (optional)
+
+# Classes
+names:
+  0: person
+  1: motorcyclegroup
+  2: terrain
+  3: ridergroup
+  4: road
+  5: motorcycle
+  6: building
+  7: truck
+  8: caravan
+  9: license plate
+  10: pole
+  11: vegetation
+  12: dynamic
+  13: cargroup
+  14: polegroup
+  15: train
+  16: bicycle
+  17: truckgroup
+  18: bicyclegroup
+  19: out of roi
+  20: guard rail
+  21: ego vehicle
+  22: rectification border
+  23: sky
+  24: bridge
+  25: wall
+  26: fence
+  27: trailer
+  28: tunnel
+  29: car
+  30: ground
+  31: parking
+  32: traffic sign
+  33: persongroup
+  34: static
+  35: rider
+  36: traffic light
+  37: sidewalk
+  38: bus
+  39: rail track

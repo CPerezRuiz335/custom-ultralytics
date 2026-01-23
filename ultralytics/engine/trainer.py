@@ -520,7 +520,7 @@ class BaseTrainer:
             # Do final val with best.pt
             seconds = time.time() - self.train_time_start
             LOGGER.info(f"\n{epoch - self.start_epoch + 1} epochs completed in {seconds / 3600:.3f} hours.")
-            # self.final_eval() # !!!
+            self.final_eval() # !!!
             if self.args.plots:
                 self.plot_metrics()
             self.run_callbacks("on_train_end")
