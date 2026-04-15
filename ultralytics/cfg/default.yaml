@@ -40,7 +40,7 @@ multi_scale: False # (bool) multiscale training by varying image size
 compile: False # (bool | str) enable torch.compile() backend='inductor'; True="default", False=off, or "default|reduce-overhead|max-autotune-no-cudagraphs"
 
 # Segmentation
-overlap_mask: True # (bool) merge instance masks into one mask during training (segment only)
+overlap_mask: False # (bool) merge instance masks into one mask during training (segment only)
 mask_ratio: 4 # (int) mask downsample ratio (segment only)
 
 # Classification
@@ -87,7 +87,7 @@ int8: False # (bool) INT8/PTQ where supported (openvino, tflite, tfjs, engine, i
 dynamic: False # (bool) dynamic shapes for torchscript, onnx, openvino, engine; enable variable image sizes
 simplify: True # (bool) ONNX/engine only; run graph simplifier for cleaner ONNX before runtime conversion
 opset: # (int, optional) ONNX/engine only; opset version for export; leave unset to use a tested default
-workspace: # (float, optional) engine (TensorRT) only; workspace size in GiB, e.g. 4
+workspace: None # (float, optional) engine (TensorRT) only; workspace size in GiB, e.g. 4
 nms: False # (bool) fuse NMS into exported model when backend supports; if True, conf/iou apply (agnostic_nms except coreml)
 
 # Hyperparameters ------------------------------------------------------------------------------------------------------
